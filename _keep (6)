@@ -1,0 +1,12 @@
+<!-- begin:header -->
+# Main Index
+Canonical paths referenced by the schema.
+<!-- end:header -->
+
+<!-- begin:paths -->
+- `PROTOCOL/soul.md` — system priors, patched by PROMPT_CORRECTOR
+- `PROTOCOL/tiny/*.md` — small context expansions, read-only in flow
+- `MEMORY/index.md` — memory registry, patched by UPDATES_WHEN_CHANGED
+- `TOOLS/tool_record.md` — available tools, patched per tool
+- `LLMS/providers.md` — LLM providers, patched per provider
+<!-- end:paths -->

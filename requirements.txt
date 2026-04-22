@@ -1,0 +1,35 @@
+# openclaw_extension
+
+Pre-scaffolded implementation of the user's personal schema, designed to
+be wired into OpenClaw as the execution / integration layer. The
+architecture is documented in `SCHEMA.excalidraw` and mapped to OpenClaw
+in `MAPPING.md`.
+
+## Layout
+
+    instruction.TXT           first file the OpenClaw agent must read
+    BOOT_PROMPT.md            the exact prompt to paste to the agent
+    SCHEMA.excalidraw         architectural source of truth
+    MAPPING.md                diagram node → OpenClaw role mapping
+    config/schema.yaml        machine-readable node & file registry
+    lib/                      md I/O, locks, config loader, OC shim
+    nodes/                    one Python module per schema node
+    scripts/                  bootstrap, verify, smoke test, dashboard
+    tests/                    unit tests for md I/O
+    PROTOCOL/ ARCHIVE/ MEMORY/ TOOLS/ LLMS/    active .md tree
+
+## Quick start (user side — Windows 11 with WSL)
+
+1. Unzip anywhere visible from WSL (e.g. `C:\Users\you\openclaw_extension`).
+2. In WSL: `cd /mnt/c/Users/you/openclaw_extension && bash scripts/bootstrap.sh`
+3. Paste the contents of `BOOT_PROMPT.md` to your OpenClaw agent.
+4. The agent reads `instruction.TXT` and executes tasks [T1]–[T8].
+5. When the agent reports `smoke test passed`, open
+   http://localhost:8765/ in your Windows browser to see the dashboard.
+
+## Rules (non-negotiable)
+
+See the top of `instruction.TXT`. The short version: the user's schema
+is primary, OpenClaw defaults that conflict are disabled, every .md
+write is read-first + patch-minimal, node names are verbatim, no new
+nodes or files without schema change first.

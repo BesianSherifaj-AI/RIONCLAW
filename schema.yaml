@@ -1,0 +1,34 @@
+"""
+Schema node: PROMPT SPLITTER
+Role: YOURS
+See SCHEMA.excalidraw for position in the flow.
+"""
+
+import re
+
+def handle(ctx: dict) -> dict:
+    """
+    Parse routing tags from LLM output and split into user / env / self.
+    Tags (convention — agent may extend):
+        [[user]] ... [[/user]]
+        [[env:<runtime>]] ... [[/env]]
+        [[self]] ... [[/self]]
+    Text outside tags defaults to user.
+    """
+    text = ctx.get("llm_output") or ""
+    splits = {"user": [], "env": [], "self": []}
+    # env tags with runtime param
+    for m in re.finditer(r"\[\[env:([a-z0-9_]+)\]\](.*?)\[\[/env\]\]", text, re.DOTALL):
+        splits["env"].append({"runtime": m.group(1), "command": m.group(2).strip()})
+    text = re.sub(r"\[\[env:[a-z0-9_]+\]\].*?\[\[/env\]\]", "", text, flags=re.DOTALL)
+    for m in re.finditer(r"\[\[self\]\](.*?)\[\[/self\]\]", text, re.DOTALL):
+        splits["self"].append(m.group(1).strip())
+    text = re.sub(r"\[\[self\]\].*?\[\[/self\]\]", "", text, flags=re.DOTALL)
+    for m in re.finditer(r"\[\[user\]\](.*?)\[\[/user\]\]", text, re.DOTALL):
+        splits["user"].append(m.group(1).strip())
+    text = re.sub(r"\[\[user\]\].*?\[\[/user\]\]", "", text, flags=re.DOTALL)
+    if text.strip():
+        splits["user"].append(text.strip())
+    ctx["splits"] = splits
+    ctx["stage"] = "PROMPT_SPLITTER"
+    return ctx

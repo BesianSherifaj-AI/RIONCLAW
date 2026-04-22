@@ -1,0 +1,109 @@
+"""
+Safe .md file I/O. Every write path goes through here.
+
+Rules enforced:
+  - read-first before every write
+  - locked writes (flock via lib.locks)
+  - append: adds an entry with a machine-readable header
+  - patch: edits only a named section between anchors
+  - replace: atomic temp + rename; previous content archived first
+
+Anchor convention (for patch):
+    <!-- begin:<section-id> -->
+    ...patchable body...
+    <!-- end:<section-id> -->
+"""
+from __future__ import annotations
+import os, uuid, datetime, tempfile, re
+from pathlib import Path
+from .locks import file_lock, LockFailed
+
+LOCK_TIMEOUT_SEC = 0.25  # 250ms per schema
+
+def _ts() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+def _header(writer: str, reason: str) -> str:
+    return (f"\n\n---\n<!-- entry: id={uuid.uuid4().hex[:12]} "
+            f"ts={_ts()} by={writer} reason={reason} -->\n")
+
+def read(path: Path | str) -> str:
+    """Read-first. Returns '' if file does not yet exist (for append)."""
+    p = Path(path)
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+def append(path: Path | str, content: str, writer: str, reason: str) -> None:
+    """Append a new entry with machine-readable header."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(p, timeout=LOCK_TIMEOUT_SEC):
+        existing = read(p)   # read-first
+        new = existing + _header(writer, reason) + content.rstrip() + "\n"
+        _atomic_write(p, new)
+
+def patch(path: Path | str, section_id: str, new_body: str,
+          writer: str, reason: str) -> str:
+    """
+    Replace only the body between anchors:
+        <!-- begin:{section_id} -->
+        ...old body...
+        <!-- end:{section_id} -->
+
+    Returns 'patched' if anchors found and replaced, 'appended' if
+    anchors missing and a new section was appended with fresh anchors.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(p, timeout=LOCK_TIMEOUT_SEC):
+        src = read(p)
+        begin = f"<!-- begin:{section_id} -->"
+        end   = f"<!-- end:{section_id} -->"
+        pattern = re.compile(
+            re.escape(begin) + r"(.*?)" + re.escape(end),
+            re.DOTALL,
+        )
+        matches = list(pattern.finditer(src))
+        if len(matches) > 1:
+            raise AmbiguousAnchor(f"{p}: {section_id} matched {len(matches)}x")
+        if not matches:
+            # append recovery, new anchor block
+            block = f"{begin}\n{new_body.rstrip()}\n{end}"
+            src2 = src + _header(writer, f"{reason} (anchor_missing)") + block + "\n"
+            _atomic_write(p, src2)
+            return "appended"
+        new_block = f"{begin}\n{new_body.rstrip()}\n{end}"
+        src2 = pattern.sub(new_block, src, count=1)
+        _atomic_write(p, src2)
+        return "patched"
+
+def replace(path: Path | str, new_content: str, writer: str,
+            reason: str, archive_path: Path | str | None = None) -> None:
+    """
+    Full-file replace. Only for ongoing_context.md.
+    Previous content is appended to archive_path first; if that fails,
+    replace aborts.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(p, timeout=LOCK_TIMEOUT_SEC):
+        prev = read(p)
+        if archive_path and prev.strip():
+            append(archive_path, prev, writer=writer,
+                   reason=f"rotated from {p.name}: {reason}")
+        _atomic_write(p, new_content.rstrip() + "\n")
+
+def _atomic_write(p: Path, data: str) -> None:
+    d = p.parent
+    fd, tmp = tempfile.mkstemp(prefix=p.name + ".", suffix=".tmp", dir=str(d))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(data)
+        os.replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+class AmbiguousAnchor(RuntimeError):
+    pass

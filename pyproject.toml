@@ -1,0 +1,37 @@
+# Boot prompt — paste this to your OpenClaw agent after unzipping
+
+Copy everything between the `---` lines below and paste it as your first
+message to the OpenClaw agent in WSL.
+
+---
+
+You are running inside WSL. The user has unzipped a folder called
+`openclaw_extension` on their Windows 11 machine. It is reachable from
+WSL at one of these paths — check each until you find it:
+
+    /mnt/c/Users/<their-username>/openclaw_extension/
+    /mnt/c/Users/<their-username>/Downloads/openclaw_extension/
+    /mnt/c/Users/<their-username>/Desktop/openclaw_extension/
+    ~/openclaw_extension/
+
+Your first action: `cat instruction.TXT` in that folder and read it
+from top to bottom, in full. That file contains the complete task list,
+the precedence rules, and the stop conditions for this job. Execute the
+tasks in the order given.
+
+Hard rules while working:
+
+- Do not rewrite or reformat any `.md` file. Use `lib/md_io.py`
+  (`append` / `patch` / `replace`) for all writes.
+- Do not add nodes to the schema. The schema is fixed in
+  `SCHEMA.excalidraw` and `config/schema.yaml`.
+- Do not invent folders, memory layers, or agents.
+- Node names in code must match `config/schema.yaml` verbatim.
+- If blocked by a real environmental issue, stop and tell me the exact
+  blocker. Do not synthesize workarounds.
+
+When you reach task [T7] in the instruction file, run
+`python3 scripts/smoke_test.py` and paste me its output verbatim, then
+stop.
+
+---

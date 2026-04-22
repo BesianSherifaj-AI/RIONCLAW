@@ -1,0 +1,31 @@
+"""
+Load config/schema.yaml and expose constants the nodes import.
+Single source of truth for node names, file paths, and update modes.
+"""
+from __future__ import annotations
+from pathlib import Path
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+
+def _load():
+    with open(ROOT / "config" / "schema.yaml") as f:
+        return yaml.safe_load(f)
+
+_SCHEMA = _load()
+
+FILES:        list[str]           = _SCHEMA["files"]
+UPDATE_MODES: dict[str, str]      = _SCHEMA["update_modes"]
+NODES:        dict[str, dict]     = _SCHEMA["nodes"]
+FLOW:         list[str]           = _SCHEMA["flow"]
+OC_PRIMS:     dict[str, object]   = _SCHEMA["openclaw_primitives"]
+OC_DISABLED:  list[str]           = _SCHEMA["oc_defaults_disabled"]
+PRECEDENCE:   list[str]           = _SCHEMA["precedence"]
+
+def node_role(name: str) -> str:
+    """YOURS | NATIVE | GLUE"""
+    return NODES[name]["role"]
+
+def file_path(relative: str) -> Path:
+    """Resolve a relative .md path to an absolute Path."""
+    return ROOT / relative

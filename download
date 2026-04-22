@@ -1,0 +1,454 @@
+# OpenClaw Integration Spec — Your System as Primary
+
+This document maps the nodes in your diagram (`333.excalidraw`) onto OpenClaw
+strictly as **execution / integration layer**. Your diagram is the source of
+truth. OpenClaw only runs things, owns channels and skills, and enforces
+approvals. It never re-plans, re-routes, or re-decomposes what your diagram
+already defines.
+
+Node names below match your diagram verbatim (uppercase where the diagram uses
+uppercase). Where the diagram says `SOUL.MD`, `SELF .MD FILES`, `MAIN INDEX`,
+etc., those names are preserved.
+
+---
+
+## 0. Source-of-Truth Hierarchy (precedence)
+
+When two rules can apply, the higher level wins:
+
+1. **Your diagram flow** — USER → SEND → PROMPT HANDLER → FORMAT IDENTIFIER →
+   (format pipeline) → ORDER AND UNIFY → SEND → LLM STATUS CHECK → MODEL →
+   CHECK RULE → (VERIFIER) → PROMPT SPLITER → OUTPUT → {USER OUTPUT,
+   ENVIRONMENTS, SELF}. This order never changes.
+2. **Your SYSTEM store** — `PROTOCOL`, `ARCHIVE`, `MEMORY`, `TOOLS`, `LLMS`.
+   Structure, filenames, and update semantics are defined by your diagram.
+3. **OpenClaw runtime constraints** — auth failure, tool sandbox denial,
+   channel unavailable, rate limit. These may *block* a step, never *reroute*
+   one.
+4. **OpenClaw defaults** — default planners, default memory, default routers,
+   default approval patterns. **Disabled.** See §8.
+
+---
+
+## 1. Component Mapping (diagram node → OpenClaw role)
+
+Three roles only:
+- **NATIVE** — implemented with an OpenClaw primitive; no code of your own.
+- **GLUE** — thin OpenClaw adapter that calls into your component; your logic
+  lives outside OpenClaw's defaults.
+- **YOURS** — your component. OpenClaw must not replace it.
+
+| Diagram node | Role | OpenClaw primitive used | Notes |
+|---|---|---|---|
+| USER | NATIVE | channel inbound | Just an entry point. |
+| CHAT (UI) | NATIVE | channel | Feeds USER. |
+| SEND (every instance) | YOURS | — | Synchronous hand-off between your stages. Do not replace with OpenClaw's async bus. |
+| PROMPT HANDLER | YOURS | — | First stage of your pipeline. OpenClaw must not pre-parse the prompt before this runs. |
+| FORMAT IDENTIFIER | YOURS | — | Decides text-only skip vs multi-format divide. |
+| DIVIDE FORMATS INDIVIDUALLY | YOURS | — | Your splitter. |
+| FILE / AUDIO / VIDEO / IMAGE / TEXT FORMAT FINDER | YOURS | — | Each one reads `ARCHIVE/codes/<format>/*.md` (see §4). |
+| IF KNOWN → USE CODE → CONVERT | YOURS | OpenClaw **skill** invocation | Skill is just the runner; the *selection* stays in your finder. |
+| IF UNKNOWN → SEND STATUS TO LLM TO CONVERT IT USING NEW CODE | YOURS | OpenClaw LLM call | LLM is NATIVE; the *decision to request new code* is YOURS. |
+| ADD NEW METHOD CODE ARCHIVE | YOURS | OpenClaw file-write skill | Append-only, see §4. |
+| ADD IT AS TASK / SEND IT TO QUEUE | YOURS | OpenClaw queue | Queue is NATIVE; the task envelope schema is YOURS. |
+| IF FAILED MORE THAN 3 TIMES | YOURS | — | Your retry policy, not OpenClaw's default retry. |
+| ORDER AND UNIFY PROMPT TO TEXT | YOURS | — | |
+| SEND TO QUEUE ONLY TEXT / PROMPT QUEUE | YOURS | OpenClaw queue (NATIVE substrate) | Queue infrastructure is native; queue *content rules* (text-only) are yours. |
+| LLM STATUS CHECK (working / idle / waiting) | YOURS | reads OpenClaw LLM provider status | OpenClaw exposes provider health; your node decides what to do with it. |
+| MODEL | YOURS | — | Routing node. Do not confuse with OpenClaw's "model selection." |
+| CHECK RULE (memory needed? tools needed?) | YOURS | — | Your gate. Skips VERIFIER when not needed. |
+| SKIP IF PROTOCOL NOT MET → SEND | YOURS | — | Fast-path back to SEND. |
+| VERIFIER | YOURS | — | Central verification + protocol-navigation node. |
+| SUPER DETAILED SMALL CONTEXT PROTOCOL AND FILES EXPLAIN | YOURS | OpenClaw file-read skill | Reader is NATIVE; the tiny-prompt expansion rule is YOURS. |
+| MAIN FILE WITH DETAILED FILEPATHS (navigator) | YOURS | OpenClaw file-read skill | File = `PROTOCOL/main_index.md`. |
+| CHECK IF QUESTIONING OR PROMPT REFINEMENT IS NEEDED | YOURS | — | |
+| PROMPT CORRECTOR | YOURS | — | Reads `SOUL.md`. |
+| QUESTION → USER / SELF | GLUE | OpenClaw **approval / elicitation** | NATIVE gate; content is yours. |
+| IF NEEDED SELF PROMPT, VERIFY OUTPUT INJECTION ACTS AS THE USER | YOURS | — | Critical injection guard. See §8. |
+| LLM | NATIVE | OpenClaw LLM provider (Ollama / LMStudio / API keys from `LLMS`) | |
+| OUTPUT | YOURS | — | Your splitter container. |
+| PROMPT SPLITER (user / environments / self) | YOURS | — | Hard rule: only YOUR splitter decides routing. OpenClaw never pre-routes. |
+| USER OUTPUT → {Custom GUI Chat Dashboard, OpenClaw Dashboard, Telegram, Windows 11 Desktop, WhatsApp} | NATIVE | OpenClaw **channels** | Each channel is a native transport. |
+| USER OUTPUT formats {Image, Video, Audio, Text, File} | GLUE | channel adapters | |
+| COMMAND OUTPUT | YOURS | — | Envelope for environment commands. |
+| ENVIRONMENTS → {Ubuntu 24.04, Windows 11, Devices, Others, Linux Terminal, Google Chrome, Ollama, Shell, ComfyUI, LLM Studio} | NATIVE | OpenClaw **runtimes / executors** | |
+| RECIEVE (from environment) | NATIVE | runtime return | |
+| IF WORKS / IF FAIL | YOURS | — | Your feedback branches. |
+| SELF | YOURS | — | |
+| SELF PROMPT FOR ANSWERING A COMPLETION OR TASK CHECK AND CONTINUATION | YOURS | OpenClaw queue re-enqueue | Re-enqueue is NATIVE; trigger condition is yours. |
+| SYSTEM (container) | YOURS | — | |
+| PROTOCOL | YOURS | filesystem | Folder tree, not OpenClaw config. |
+| ARCHIVE → {Images, Video, Text, Audio, Scripts, Apps, System Archive File Record, Codes} | YOURS | filesystem | Append-only stores. |
+| MEMORY → {SELF, USER, Short Term, Long Term, Archived Memory, Ongoing Context, Live Session, Actual Tasks, Tasks, Long Term Chat Context} | YOURS | filesystem + index | Do **not** map to OpenClaw's default memory layer. |
+| SELF UPDATING RECORD OF MEMORY / FILENAMES / SUBFILES / DATABASE / MAIN INDEX | YOURS | — | Your index mutator. |
+| READ / WRITE / CHANGE / DELETE / RECIVE (on memory) | GLUE | OpenClaw file tools | Primitives are native; *when and what* is yours. |
+| UPDATES WHEN CHANGED | YOURS | — | Change-notifier that triggers re-index. |
+| LLMS → {Ollama, LMStudio, API Keys} | NATIVE | OpenClaw provider registry | |
+| TOOLS → TOOL RECORD → {Windows App / Linux Apps, Codes} | GLUE | OpenClaw tool registry | Registry is native; `TOOL RECORD` remains your ledger. |
+| USER DATA → {Personal Experiences, Self .md files, Credentials, Environments, Tasks, Long Term Chat Context} | YOURS | filesystem + secret store | Credentials may use OpenClaw secret store NATIVE. |
+| NEXT STEP OR STEPS SELECTOR | YOURS | — | Consumes MEMORY + TASKS; drives SELF loop. |
+| DASHBOARD UI, VISIBILITY UI, SYSTEM LIVE CONFIG/EDIT/VIEW, TOGGLES, MONITORING (Agents Task, LLM Status, Time/Date, Tasks), AGENTS, MODEL SWITCH, SYSTEM ON/OFF/RESTART, SYSTEM HEALTH | GLUE | OpenClaw Dashboard | Render only. Read-through views of the SYSTEM store. No separate state. |
+
+---
+
+## 2. Primary Call Flow (authoritative trace)
+
+This is the single flow. OpenClaw invocations are marked `[OC:...]` and only
+appear where a native primitive is used. Everything else is yours and must not
+be substituted.
+
+```
+USER
+ └─► SEND
+      └─► PROMPT HANDLER
+           └─► FORMAT IDENTIFIER
+                ├─[text only]─► SEND ─► LLM STATUS CHECK        (skip format pipeline)
+                └─[multiple formats]─► DIVIDE FORMATS INDIVIDUALLY
+                     ├─► FILE  ─► FILE FORMAT FINDER
+                     ├─► IMAGE ─► IMAGE FORMAT FINDER
+                     ├─► VIDEO ─► VIDEO FORMAT FINDER
+                     ├─► AUDIO ─► AUDIO FORMAT FINDER
+                     └─► TEXT  (passthrough)
+
+           Each FINDER:
+            ├─[known]   ► USE CODE ─► CONVERT ─────────────────► ORDER & UNIFY
+            └─[unknown] ► SEND STATUS TO LLM TO CONVERT  [OC:LLM]
+                           ├─[possible]     ► CONVERT
+                           │                   └─► ADD NEW METHOD CODE ARCHIVE  [OC:file-write, append-only]
+                           │                        └─[if ≥3 failures on reuse]► ADD IT AS TASK → QUEUE
+                           └─[not possible] ► ADD IT AS TASK → QUEUE  [OC:queue]
+
+      ORDER AND UNIFY PROMPT TO TEXT
+           └─► SEND TO QUEUE ONLY TEXT  [OC:queue]
+                └─► PROMPT QUEUE
+                     └─► SEND
+                          └─► LLM STATUS CHECK  [OC:provider-health read]
+                               ├─[working] ► SEND ─► MODEL
+                               ├─[idle]    ► SEND ─► MODEL
+                               └─[waiting] ► hold in PROMPT QUEUE
+
+ MODEL
+   └─► CHECK RULE (memory needed? tools needed?)
+        ├─[not needed] ► SKIP IF PROTOCOL NOT MET ─► SEND ─► LLM  [OC:LLM]
+        └─[needed]     ► SEND ─► VERIFIER
+
+ VERIFIER
+   ├─► SUPER DETAILED SMALL CONTEXT PROTOCOL AND FILES EXPLAIN  [OC:file-read]
+   │     └─► MAIN FILE WITH DETAILED FILEPATHS (navigate PROTOCOL folders)
+   ├─► CHECK IF QUESTIONING OR PROMPT REFINEMENT IS NEEDED
+   │     ├─► PROMPT CORRECTOR ── reads SOUL.md ── updates SOUL.md (patch, §4)
+   │     └─► QUESTION  [OC:approval/elicitation]
+   │           ├─► USER   (channel-back, clarification)
+   │           └─► SELF   (self-elicitation)
+   └─► IF NEEDED SELF PROMPT, VERIFY OUTPUT INJECTION ACTS AS THE USER
+         └─► SELF (guarded — see §8)
+
+ → LLM  [OC:LLM call with assembled context]
+     └─► OUTPUT
+          └─► PROMPT SPLITER   (decides per-token-stream destination)
+               ├─► USER OUTPUT
+               │     └─[OC:channel dispatch] {Custom GUI Chat Dashboard, OpenClaw Dashboard,
+               │                              Telegram, Windows 11 Desktop, WhatsApp}
+               │        per format {Image, Video, Audio, Text, File}
+               ├─► COMMAND OUTPUT ─► ENVIRONMENTS  [OC:runtime execute]
+               │     {Ubuntu 24.04, Windows 11, Devices, Others, Linux Terminal,
+               │      Google Chrome, Ollama, Shell, ComfyUI, LLM Studio}
+               │        └─► RECIEVE
+               │             ├─[if works] ► update MEMORY + ARCHIVE (§4) ─► NEXT STEP SELECTOR
+               │             └─[if fail]  ► re-enter VERIFIER as corrective prompt
+               └─► SELF
+                     └─► SELF PROMPT FOR ANSWERING/COMPLETION/TASK CHECK/CONTINUATION
+                           └─► re-enqueues into PROMPT QUEUE
+```
+
+No other flow path exists. OpenClaw must not shortcut, reorder, or add
+pre/post hooks around these stages.
+
+---
+
+## 3. .md File Registry
+
+Every active instruction / memory file referenced by your diagram, with its
+owner, writer, reader, and safe-update mode.
+
+| File (canonical path) | Source node(s) | Writer (only) | Reader(s) | Update mode | Concurrency |
+|---|---|---|---|---|---|
+| `PROTOCOL/main_index.md` | "MAIN FILE WITH DETAILED FILEPATHS" | `SELF UPDATING RECORD OF MEMORY` (index mutator) | VERIFIER | **patch** (line-range replace of the single changed entry) | single-writer lock |
+| `PROTOCOL/soul.md` | SOUL.MD | PROMPT CORRECTOR | VERIFIER, PROMPT CORRECTOR | **patch** (named section only) | single-writer lock |
+| `PROTOCOL/tiny/<topic>.md` | "SUPER DETAILED SMALL CONTEXT PROTOCOL" expansion targets | PROMPT CORRECTOR (rare), manual | VERIFIER | **read-only in flow**; writes are out-of-band | — |
+| `ARCHIVE/codes/<format>/<method>.md` | "ADD NEW METHOD CODE ARCHIVE" | FORMAT FINDER (unknown-branch handler) | FORMAT FINDERs | **append-only** (new file per method, never edit) | per-file create-exclusive |
+| `ARCHIVE/system_archive_file_record.md` | "SYSTEM ARCHIVE FILE RECORD" | `SELF UPDATING RECORD OF MEMORY` | DASHBOARD, NEXT STEP SELECTOR | **append** | single-writer lock |
+| `MEMORY/index.md` | "SELF UPDATING RECORD OF MEMORY / FILENAMES / SUBFILES / DATABASE / MAIN INDEX" | index mutator | VERIFIER, NEXT STEP SELECTOR, DASHBOARD | **patch** (row-level) | single-writer lock |
+| `MEMORY/self/short_term.md` | SELF short-term | MEMORY writer | VERIFIER, MODEL (via CHECK RULE) | **append + decay-delete** | single-writer |
+| `MEMORY/self/long_term.md` | SELF long-term | MEMORY writer (on promotion from short→long) | VERIFIER | **append** | single-writer |
+| `MEMORY/self/archived.md` | ARCHIVED MEMORY | MEMORY writer | on-demand | **append; never in-place rewrite** | single-writer |
+| `MEMORY/self/ongoing_context.md` | Live session / last session ongoing context | MEMORY writer (per turn) | VERIFIER, SELF loop | **replace** (full rewrite per turn) | single-writer |
+| `MEMORY/self/actual_tasks.md` | ACTUAL TASKS | NEXT STEP SELECTOR | SELF loop, DASHBOARD | **patch** (task-row) | single-writer |
+| `MEMORY/self/tasks.md` | TASKS (backlog) | queue writer | NEXT STEP SELECTOR | **append / patch-status** | single-writer |
+| `MEMORY/user/personal_experiences.md` | USER DATA → PERSONAL EXPERIENCES | MEMORY writer | VERIFIER (when user-context needed) | **append-only** | single-writer |
+| `MEMORY/user/self_md/<name>.md` | SELF .MD FILES (user-supplied) | user (out-of-band) | VERIFIER | **read-only in flow** | — |
+| `MEMORY/user/environments.md` | USER DATA → ENVIRONMENTS | ENVIRONMENT registrar | MODEL, ENVIRONMENTS adapter | **patch** | single-writer |
+| `MEMORY/user/tasks.md` | USER DATA → TASKS | user + NEXT STEP SELECTOR | SELF loop | **patch-status / append** | single-writer |
+| `MEMORY/user/long_term_chat_context.md` | LONG TERM CHAT CONTEXT | chat channel writer | VERIFIER | **append** | single-writer |
+| `MEMORY/user/credentials.*` | USER DATA → CREDENTIALS | OpenClaw secret store NATIVE | ENVIRONMENTS, TOOLS | **replace** (secret rotation) | secret-store semantics |
+| `TOOLS/tool_record.md` | TOOL RECORD | TOOLS registrar | PROMPT CORRECTOR, MODEL (CHECK RULE for "tools needed") | **patch** (tool row: name, path, last-used, health) | single-writer |
+| `LLMS/providers.md` | LLMS → {Ollama, LMStudio, API Keys} | LLM registrar | LLM STATUS CHECK, MODEL | **patch** (provider row) | single-writer |
+
+Everything not listed above is not an active .md instruction file. OpenClaw
+must not create ambient `.md` files (e.g. its default `CLAUDE.md`-style
+project instructions, agent memory dumps, run logs in markdown) inside these
+paths.
+
+---
+
+## 4. Read / Append / Patch / Replace Rules
+
+General rules, applied per-file according to the "Update mode" column above.
+
+### 4.1 Read-first rule
+Before any write, the writer **must** read the current file (or confirm
+non-existence). No write is ever blind. If the read fails, the write aborts
+and the event goes to the task queue with reason `read_precondition_failed`.
+
+### 4.2 Append
+- New content is added to the end of the file, preceded by a single
+  `\n---\n` separator and a minimal machine-readable header:
+  ```
+  ---
+  <!-- entry: id=<uuid> ts=<iso8601> by=<writer-node> reason=<short> -->
+  ```
+- Never edit any prior entry.
+- Used for: `ARCHIVE/codes/*`, `MEMORY/*/long_term.md`, `archived.md`,
+  `personal_experiences.md`, `long_term_chat_context.md`,
+  `system_archive_file_record.md`.
+
+### 4.3 Patch (section-scoped or row-scoped)
+Patch = modify **only** a single addressable block. The block address is a
+stable anchor already present in the file:
+
+- For section anchors: `<!-- begin:<section-id> -->` … `<!-- end:<section-id> -->`.
+- For row anchors: fenced table row with a stable key column.
+
+Rules:
+- The writer reads the file, locates the anchor, replaces the bytes between
+  the two markers, writes atomically (write-to-temp + rename).
+- If the anchor is missing, the writer **must not** invent a location. It
+  appends a new block (§4.2) with a fresh anchor and logs
+  `anchor_missing_recovered_via_append`.
+- If multiple anchors match, the writer aborts with
+  `ambiguous_anchor` — task goes to queue, never overwrites.
+
+Used for: `main_index.md`, `soul.md`, `MEMORY/index.md`,
+`actual_tasks.md`, `tool_record.md`, `providers.md`,
+`MEMORY/user/environments.md`.
+
+### 4.4 Replace (full-file)
+- Only one file in the active set is replace-mode: `ongoing_context.md`.
+- Replace is atomic (temp + rename). The previous content is written into
+  `MEMORY/self/archived.md` as an append entry before the replace
+  completes. If that append fails, the replace aborts.
+
+### 4.5 Read-only in flow
+- `PROTOCOL/tiny/*.md` and `MEMORY/user/self_md/*.md` are never written by
+  the main flow. They may only be changed out-of-band. Writes from any
+  flow node to these paths are a hard violation.
+
+### 4.6 Never-rewrite rule
+- `ARCHIVE/codes/*` files are per-method. Do not edit a method file; add a
+  new method file with a versioned suffix if a correction is needed
+  (`<method>.v2.md`). The FORMAT FINDER picks the highest-version working
+  method. This preserves your "ADD NEW METHOD CODE ARCHIVE" semantic.
+
+### 4.7 Concurrency
+- All single-writer files are guarded by an OS-level advisory lock
+  (`flock`) on a sibling `.lock` file.
+- If the lock can't be acquired within 250 ms, the write becomes a task:
+  `ADD IT AS TASK / SEND IT TO QUEUE`. This mirrors the diagram's fallback
+  pattern rather than introducing new retry logic.
+
+---
+
+## 5. Triggers & Timing
+
+Only these triggers exist. Anything not listed must not fire a write.
+
+| Trigger | When it fires | Files it may touch | Notes |
+|---|---|---|---|
+| **User request** | USER → SEND | none yet | Pure input. Writes only happen downstream. |
+| **Format converted (known path)** | FINDER `IF KNOWN` → CONVERT succeeds | `system_archive_file_record.md` (append) | Method re-use count is updated via `tool_record.md` patch. |
+| **Format converted (new method)** | FINDER `IF UNKNOWN` → LLM → possible → CONVERT | `ARCHIVE/codes/<format>/<method>.md` (new file), `main_index.md` (patch: new entry), `system_archive_file_record.md` (append) | Three writes, all under §4.7 locks. Failure of any rolls back the others via temp-file strategy. |
+| **Format conversion not possible / ≥3 failures** | FINDER failure branches | `MEMORY/self/tasks.md` (append), `system_archive_file_record.md` (append) | No further .md touched. |
+| **Prompt enqueued** | SEND TO QUEUE ONLY TEXT | OpenClaw queue (native; not markdown) | No .md write. |
+| **LLM status change** | LLM STATUS CHECK observes a delta | `LLMS/providers.md` (patch), DASHBOARD re-render | Only writes when a value actually changes (deduped). |
+| **Rule check decides tools/memory needed** | MODEL → CHECK RULE | none | Pure decision. |
+| **VERIFIER protocol navigation** | VERIFIER traversing tiny files | reads only | Never writes. |
+| **Prompt correction** | PROMPT CORRECTOR | `soul.md` (patch) | One named section, scoped to correction reason. |
+| **Question raised** | QUESTION | OpenClaw approval queue | Not a .md write. Response feeds back into PROMPT QUEUE. |
+| **LLM output produced** | LLM → OUTPUT | `ongoing_context.md` (replace, §4.4), `long_term_chat_context.md` (append), `short_term.md` (append) | Three writes on every turn, deterministic order: ongoing (replace) → chat log (append) → short-term (append). |
+| **Environment action executed** | COMMAND OUTPUT → ENVIRONMENTS → RECIEVE | `system_archive_file_record.md` (append), `actual_tasks.md` (patch: status) | |
+| **Environment action failed** | RECIEVE `IF FAIL` | `actual_tasks.md` (patch), VERIFIER re-entry | No task duplication; the same task row is patched. |
+| **SELF loop iteration** | SELF → SELF PROMPT FOR ANSWERING… | re-enqueues into PROMPT QUEUE | Not a .md write directly. |
+| **Memory change observed** | UPDATES WHEN CHANGED (watcher) | `MEMORY/index.md` (patch) | Debounced 500 ms; coalesces bursts. |
+| **Heartbeat / recurring** | **Not permitted.** Your diagram does not define a heartbeat. | — | OpenClaw's default cron/heartbeat agents must be disabled. |
+
+Event ordering inside a single turn is fixed:
+`LLM emits → PROMPT SPLITER decides → channel/runtime dispatch → on
+success: ongoing_context replace → chat log append → short_term append →
+tool_record patch (if a tool was used) → index patch (if new filepaths)`.
+Any writer that wants to jump this order must instead enqueue a task.
+
+---
+
+## 6. Conflict Rules (OpenClaw ↔ your system)
+
+1. **Flow precedence.** If an OpenClaw default hook (pre-prompt rewriter,
+   post-prompt summarizer, auto-context-injection, default memory recall)
+   would insert a step into the flow in §2, it is disabled at configuration
+   time. The flow has exactly the nodes your diagram shows.
+2. **Memory precedence.** OpenClaw's built-in short-term / semantic memory
+   is **off**. MEMORY is your filesystem tree. If OpenClaw needs "memory"
+   for a skill call, it receives a prepared context slice from VERIFIER;
+   it does not fetch its own.
+3. **Routing precedence.** OpenClaw's channel routing is a transport, not
+   a router. PROMPT SPLITER is the only router. OpenClaw delivers to the
+   channel/runtime it is told; it does not pick.
+4. **Approval precedence.** OpenClaw's approval gate is used only for
+   QUESTION. It is not used elsewhere (no "ask user to confirm tool use"
+   if your CHECK RULE didn't require it).
+5. **Role precedence.** If a role/agent name already exists in your
+   diagram (VERIFIER, PROMPT CORRECTOR, NEXT STEP SELECTOR, etc.),
+   OpenClaw must not define a second agent with an overlapping purpose.
+   Specifically: no OpenClaw "planner agent", no OpenClaw "critic agent",
+   no OpenClaw "router agent", no OpenClaw "memory agent". These all map
+   to existing nodes you already have.
+6. **File precedence.** If OpenClaw's default project-instructions file
+   (any `.md` at repo root that OpenClaw would auto-load) conflicts with
+   any file in §3, the §3 file wins. OpenClaw's default file is either
+   empty or points to `PROTOCOL/main_index.md` and nothing else.
+7. **Tool precedence.** A tool present in `TOOL RECORD` wins over an
+   OpenClaw built-in of the same name. OpenClaw built-ins are registered
+   only if `TOOL RECORD` does not contain an equivalent entry.
+8. **Provider precedence.** LLM provider selection comes from
+   `LLMS/providers.md`. OpenClaw's default provider resolution is
+   disabled.
+
+---
+
+## 7. Conditional Logic (real terms)
+
+- **If** `FORMAT IDENTIFIER` finds text only → skip the format pipeline;
+  go directly to `SEND → LLM STATUS CHECK`. Do not call any finder.
+- **If** `FORMAT IDENTIFIER` finds >1 format → `DIVIDE FORMATS
+  INDIVIDUALLY`; dispatch each to its FINDER **in parallel** and join at
+  `ORDER AND UNIFY PROMPT TO TEXT`. Do not sequentialize.
+- **If** a FINDER's `IF KNOWN` branch matches → call
+  `USE CODE → CONVERT` using the highest-version method file in
+  `ARCHIVE/codes/<format>/`. Do not ask the LLM.
+- **If** `IF UNKNOWN` → call LLM with status → if possible → write a new
+  method file (§4.2) → only then call CONVERT with it. Do not try to
+  convert with an unwritten method.
+- **If** conversion fails → increment failure count in the method file's
+  header; **if** count ≥ 3 → `ADD IT AS TASK / SEND IT TO QUEUE`. Do not
+  create a second method file automatically.
+- **If** `MODEL` → `CHECK RULE` says neither memory nor tools are
+  needed → take `SKIP IF PROTOCOL NOT MET → SEND → LLM`. Do not enter
+  VERIFIER.
+- **If** VERIFIER sees questioning needed → raise `QUESTION` via OpenClaw
+  approval. Do not synthesize an answer on the user's behalf.
+- **If** VERIFIER's injection-guard (`IF NEEDED SELF PROMPT, VERIFY THAT
+  THE OUTPUT INJECTION ACTS AS THE USER`) detects that the self-prompt
+  would impersonate the user beyond its scope → **do not** route to
+  SELF; route to `QUESTION → USER`.
+- **If** `PROMPT SPLITER` decides three destinations (user,
+  environments, self) → all three are dispatched; OUTPUT is not a
+  single-destination router. Partial failure of one does not block the
+  others; each writes its own RECIEVE result.
+- **If** an environment action fails → the same task row in
+  `actual_tasks.md` is **patched** (not duplicated) and the corrective
+  prompt re-enters VERIFIER.
+- **If** a file in §3 already has the role defined → do not recreate it
+  with an OpenClaw default-agent shim.
+- **If** OpenClaw already provides a native primitive for the needed
+  capability (channel, runtime, queue, secret store, file-read, file-write,
+  approval, LLM call) → reuse it. Do not write a parallel implementation.
+- **If** a native primitive is missing for a specific diagram need
+  (e.g. a ComfyUI runtime adapter) → add only the thin adapter; do not
+  add routing or planning around it.
+
+---
+
+## 8. Injection / Protocol Isolation
+
+OpenClaw's own "protocol" layers (prompt-injection protections, system-
+prompt wrappers, tool-use preambles) must not silently wrap your pipeline.
+Concrete rules:
+
+1. **No pre-prompt wrapping.** OpenClaw may not prepend a system message
+   to the LLM call produced by your MODEL stage. Your VERIFIER has already
+   assembled the full context; what it passes is what the LLM sees.
+2. **No post-generation editing.** OpenClaw may not rewrite LLM output
+   before `OUTPUT`. `PROMPT SPLITER` operates on the raw stream.
+3. **Injection guard is yours.** The `IF NEEDED SELF PROMPT, VERIFY THAT
+   THE OUTPUT INJECTION ACTS AS THE USER` node is the only guard against
+   model output being fed back as a user turn. OpenClaw's default
+   injection protection is disabled so it cannot conflict with this node.
+4. **Channel-inbound sanitization.** When a channel (Telegram, WhatsApp,
+   etc.) receives content, OpenClaw may strip transport-level artifacts
+   (protocol headers, attachment wrappers). It must not alter message
+   semantics. The untouched payload enters USER → SEND → PROMPT HANDLER.
+5. **Tool-result sanitization.** RECIEVE from environments is treated as
+   untrusted input and re-enters VERIFIER if it is going to affect
+   subsequent reasoning. OpenClaw's default "tool results are trusted
+   context" behavior is disabled.
+6. **No shadow instruction files.** OpenClaw must not auto-create or
+   auto-read `.claude.md`, `AGENTS.md`, `CLAUDE.md`, `system.md`, or any
+   ambient-instruction file outside §3. If OpenClaw ships with a default
+   instruction file, it is either removed or contains only one line
+   pointing to `PROTOCOL/main_index.md`.
+
+---
+
+## 9. Non-Duplication Inventory (things OpenClaw MUST NOT create)
+
+Confirmed against your diagram. Each item already exists in your system;
+OpenClaw must not spawn an equivalent:
+
+- Planner / decomposer → you have `FORMAT IDENTIFIER` +
+  `DIVIDE FORMATS INDIVIDUALLY` + `PROMPT SPLITER`.
+- Router → you have `PROMPT SPLITER` + `OUTPUT` + `LLM STATUS CHECK` +
+  `CHECK RULE`.
+- Critic / verifier → you have `VERIFIER` + `PROMPT CORRECTOR` +
+  injection guard.
+- Memory agent → you have `MEMORY` subtree + `SELF UPDATING RECORD OF
+  MEMORY` + `UPDATES WHEN CHANGED`.
+- Task manager → you have `ACTUAL TASKS` + `TASKS` +
+  `NEXT STEP OR STEPS SELECTOR` + the queue path via
+  `ADD IT AS TASK / SEND IT TO QUEUE`.
+- Tool registry → you have `TOOLS / TOOL RECORD`.
+- Prompt optimizer → you have `PROMPT CORRECTOR` +
+  `PROMPT CORRECTION` flow into `SOUL.md`.
+- Retry policy → you have the `IF FAILED MORE THAN 3 TIMES` rule.
+- Dashboard → `DASHBOARD UI` renders the SYSTEM store; no separate state.
+- Heartbeat / background agent → your diagram has none. None is added.
+
+---
+
+## 10. Invariants (must hold at all times)
+
+1. Every LLM invocation originates from one of two paths: the "skip
+   protocol" fast-path (CHECK RULE → `IF NOT NEEDED` → SEND → LLM) or
+   the VERIFIER path. No other path reaches the LLM.
+2. Every environment side-effect is preceded by `PROMPT SPLITER` →
+   `COMMAND OUTPUT`. Environments are never called directly by
+   VERIFIER, MODEL, or any finder.
+3. Every .md write in §3 passes §4 (read-first, scoped, locked). A write
+   that cannot comply becomes a task via
+   `ADD IT AS TASK / SEND IT TO QUEUE`.
+4. No file outside §3 is treated as an active instruction file.
+5. Node names in code, configuration, and logs match the diagram
+   exactly (case, spacing, wording).
+6. Any future extension that adds a step to the flow in §2, a file in
+   §3, or a trigger in §5 requires the diagram to change first. OpenClaw
+   must not add any of these on its own.
+
+— end —
